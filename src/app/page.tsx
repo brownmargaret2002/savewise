@@ -1,16 +1,16 @@
 
 "use client";
 
-import { useState, useEffect, type FormEvent } from "react";
+import { useState, useEffect, type FormEvent, type CSSProperties } from "react";
 import Image from "next/image";
 import {
   Leaf, Wallet, ArrowRight, LayoutDashboard, Target, History,
   Settings, TrendingUp, TrendingDown, Plus, Bell, X, Download,
   UserRound, Mail, ShieldCheck, Pencil, Check, CheckCheck,
-  Trash2, Info, CircleDollarSign,
+  Trash2, Info, CircleDollarSign, Eye, EyeOff,
 } from "lucide-react";
 
-type Screen = "welcome" | "signup" | "login" | "dashboard";
+type Screen = "welcome" | "signup" | "login" | "forgotPassword" | "dashboard";
 type TransactionType = "income" | "expense";
 
 type Transaction = {
@@ -36,9 +36,42 @@ type AppNotification = {
   type: "income" | "expense" | "savings" | "general";
 };
 
-const STORAGE_KEY = "savewise-dashboard-v1";
+const STORAGE_KEY = "savewise-dashboard-v2";
 const SETTINGS_KEY = "savewise-settings-v1";
 const NOTIFICATIONS_KEY = "savewise-notifications-v1";
+const DEMO_ACCOUNT_KEY = "savewise-demo-account-v1";
+
+type DemoAccount = {
+  email: string;
+  displayName: string;
+  passwordHash: string;
+};
+
+async function hashDemoPassword(password: string) {
+  const encoded = new TextEncoder().encode(password);
+  const digest = await crypto.subtle.digest("SHA-256", encoded);
+  return Array.from(new Uint8Array(digest))
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+function readDemoAccount(): DemoAccount | null {
+  try {
+    const saved = localStorage.getItem(DEMO_ACCOUNT_KEY);
+    if (!saved) return null;
+    const parsed = JSON.parse(saved);
+    if (
+      typeof parsed.email === "string" &&
+      typeof parsed.displayName === "string" &&
+      typeof parsed.passwordHash === "string"
+    ) {
+      return parsed as DemoAccount;
+    }
+  } catch (error) {
+    console.error("Could not read the demo account:", error);
+  }
+  return null;
+}
 
 const defaultSettings: UserSettings = {
   displayName: "SaveWise User",
@@ -101,29 +134,7 @@ function formatNotificationDate(dateString: string) {
   }).format(date);
 }
 
-const initialTransactions: Transaction[] = [
-  {
-    id: 1,
-    title: "Monthly salary",
-    type: "income",
-    amount: 150000,
-    date: getDateOffset(0),
-  },
-  {
-    id: 2,
-    title: "Food and groceries",
-    type: "expense",
-    amount: 25000,
-    date: getDateOffset(1),
-  },
-  {
-    id: 3,
-    title: "Freelance payment",
-    type: "income",
-    amount: 50000,
-    date: getDateOffset(2),
-  },
-];
+const initialTransactions: Transaction[] = [];
 
 const formatMoney = (amount: number) =>
   new Intl.NumberFormat("en-NG", {
@@ -134,6 +145,172 @@ const formatMoney = (amount: number) =>
 
 export default function Home() {
   const [screen, setScreen] = useState<Screen>("welcome");
+  const [authName, setAuthName] = useState("");
+  const [authEmail, setAuthEmail] = useState("");
+  const [authPassword, setAuthPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
+  const [authMessage, setAuthMessage] = useState("");
+
+  const [forgotEmail, setForgotEmail] = useState("");
+  const [resetPassword, setResetPassword] = useState("");
+  const [resetConfirmPassword, setResetConfirmPassword] = useState("");
+  const [showResetPassword, setShowResetPassword] = useState(false);
+
+  function goToAuth(nextScreen: "signup" | "login") {
+    setAuthMessage("");
+    setAuthPassword("");
+    setConfirmPassword("");
+    setShowPassword(false);
+    setScreen(nextScreen);
+  }
+
+  async function handleSignup(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const email = authEmail.trim().toLowerCase();
+    const displayName = authName.trim() || "SaveWise User";
+
+    if (authPassword.length < 8) {
+      setAuthMessage("Please use a password with at least 8 characters.");
+      return;
+    }
+    if (authPassword !== confirmPassword) {
+      setAuthMessage("Your passwords do not match.");
+      return;
+    }
+    if (readDemoAccount()) {
+      setAuthMessage("A demo account is already saved in this browser. Please log in or use Forgot Password.");
+      return;
+    }
+
+    try {
+      const account: DemoAccount = {
+        email,
+        displayName,
+        passwordHash: await hashDemoPassword(authPassword),
+      };
+      localStorage.setItem(DEMO_ACCOUNT_KEY, JSON.stringify(account));
+      localStorage.setItem(
+        SETTINGS_KEY,
+        JSON.stringify({ displayName, email, notifications: true })
+      );
+      setAuthMessage("");
+      setAuthPassword("");
+      setConfirmPassword("");
+      setScreen("dashboard");
+    } catch (error) {
+      console.error("Could not create the demo account:", error);
+      setAuthMessage("We couldn't create the demo account. Please try again.");
+    }
+  }
+
+  async function handleLogin(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const account = readDemoAccount();
+    const email = authEmail.trim().toLowerCase();
+
+    if (!account) {
+      setAuthMessage("No demo account found in this browser. Please select Get Started to create one.");
+      return;
+    }
+    if (account.email !== email) {
+      setAuthMessage("We couldn't find a demo account with that email address.");
+      return;
+    }
+
+    try {
+      const passwordHash = await hashDemoPassword(authPassword);
+      if (passwordHash !== account.passwordHash) {
+        setAuthMessage("Incorrect password. Please try again or use Forgot Password.");
+        return;
+      }
+      setAuthMessage("");
+      setAuthPassword("");
+      setScreen("dashboard");
+    } catch (error) {
+      console.error("Could not verify the demo password:", error);
+      setAuthMessage("We couldn't verify your password. Please try again.");
+    }
+  }
+
+  async function handlePasswordReset(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const account = readDemoAccount();
+    const email = forgotEmail.trim().toLowerCase();
+
+    if (!account || account.email !== email) {
+      setAuthMessage("No demo account was found with that email address.");
+      return;
+    }
+    if (resetPassword.length < 8) {
+      setAuthMessage("Please use a new password with at least 8 characters.");
+      return;
+    }
+    if (resetPassword !== resetConfirmPassword) {
+      setAuthMessage("Your new passwords do not match.");
+      return;
+    }
+
+    try {
+      const updatedAccount = {
+        ...account,
+        passwordHash: await hashDemoPassword(resetPassword),
+      };
+      localStorage.setItem(DEMO_ACCOUNT_KEY, JSON.stringify(updatedAccount));
+      setAuthEmail(email);
+      setAuthPassword("");
+      setResetPassword("");
+      setResetConfirmPassword("");
+      setAuthMessage("Demo password reset. You can now log in with your new password.");
+      setScreen("login");
+    } catch (error) {
+      console.error("Could not reset the demo password:", error);
+      setAuthMessage("We couldn't reset the password. Please try again.");
+    }
+  }
+
+  async function updateDemoPassword(
+    currentPassword: string,
+    newPassword: string
+  ): Promise<{ ok: boolean; message: string }> {
+    const account = readDemoAccount();
+    if (!account) {
+      return {
+        ok: false,
+        message: "No demo account was found in this browser. Please log out and create an account first.",
+      };
+    }
+
+    try {
+      const currentHash = await hashDemoPassword(currentPassword);
+      if (currentHash !== account.passwordHash) {
+        return { ok: false, message: "Your current password is incorrect." };
+      }
+      if (newPassword.length < 8) {
+        return { ok: false, message: "Your new password must contain at least 8 characters." };
+      }
+
+      const updatedAccount = {
+        ...account,
+        passwordHash: await hashDemoPassword(newPassword),
+      };
+      localStorage.setItem(DEMO_ACCOUNT_KEY, JSON.stringify(updatedAccount));
+      return { ok: true, message: "Your demo password has been changed successfully." };
+    } catch (error) {
+      console.error("Could not change the demo password:", error);
+      return { ok: false, message: "We couldn't change your password. Please try again." };
+    }
+  }
+
+  const inputStyle: CSSProperties = {
+    width: "100%",
+    boxSizing: "border-box",
+    padding: "13px",
+    border: "1px solid #dce6dc",
+    borderRadius: "10px",
+    color: "#34483b",
+    outlineColor: "#8dbb57",
+  };
 
   return (
     <main className="welcome-page">
@@ -158,7 +335,6 @@ export default function Home() {
                   Understand what may be left after your expenses, choose an
                   amount to save and track your progress.
                 </p>
-
                 <div className="hero-visual">
                   <div className="hero-circle">
                     <div className="wallet-illustration">
@@ -170,84 +346,188 @@ export default function Home() {
                   </div>
                 </div>
               </section>
-
               <section className="welcome-actions">
-                <button
-                  className="primary-button"
-                  onClick={() => setScreen("signup")}
-                >
+                <button className="primary-button" onClick={() => goToAuth("signup")}>
                   Get Started <ArrowRight size={17} />
                 </button>
-
-                <button
-                  className="secondary-button"
-                  onClick={() => setScreen("login")}
-                >
+                <button className="secondary-button" onClick={() => goToAuth("login")}>
                   I already have an account
                 </button>
-
-                <p className="demo-note">
-                  Demo wallet only. No real money transfers.
-                </p>
+                <p className="demo-note">Demo wallet only. No real money transfers.</p>
               </section>
             </>
+          ) : screen === "forgotPassword" ? (
+            <section className="auth-content">
+              <h1>Forgot password?</h1>
+              <p>Enter your demo account email and choose a new password.</p>
+              <form onSubmit={handlePasswordReset} style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+                <label htmlFor="forgot-email">Email address</label>
+                <input
+                  id="forgot-email"
+                  type="email"
+                  value={forgotEmail}
+                  onChange={(event) => setForgotEmail(event.target.value)}
+                  placeholder="Enter your account email"
+                  required
+                  style={inputStyle}
+                />
+                <label htmlFor="reset-password">New password</label>
+                <div style={{ display: "flex", gap: "8px" }}>
+                  <input
+                    id="reset-password"
+                    type={showResetPassword ? "text" : "password"}
+                    value={resetPassword}
+                    onChange={(event) => setResetPassword(event.target.value)}
+                    placeholder="At least 8 characters"
+                    minLength={8}
+                    required
+                    style={{ ...inputStyle, flex: 1, minWidth: 0 }}
+                  />
+                  <button
+                    type="button"
+                    aria-label={showResetPassword ? "Hide password" : "Show password"}
+                    onClick={() => setShowResetPassword((value) => !value)}
+                    style={{ border: "1px solid #dce6dc", borderRadius: "10px", background: "white", color: "#315b3d", padding: "0 12px", cursor: "pointer" }}
+                  >
+                    {showResetPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+                  </button>
+                </div>
+                <label htmlFor="reset-confirm-password">Confirm new password</label>
+                <input
+                  id="reset-confirm-password"
+                  type={showResetPassword ? "text" : "password"}
+                  value={resetConfirmPassword}
+                  onChange={(event) => setResetConfirmPassword(event.target.value)}
+                  placeholder="Re-enter new password"
+                  minLength={8}
+                  required
+                  style={inputStyle}
+                />
+                <button type="submit" className="primary-button">Reset Demo Password</button>
+              </form>
+              {authMessage && <p role="status" className="demo-note" style={{ lineHeight: 1.5 }}>{authMessage}</p>}
+              <button className="secondary-button" onClick={() => { setAuthMessage(""); setScreen("login"); }}>
+                Back to Login
+              </button>
+              <p className="demo-note">Demo only: this reset does not send an email or verify your identity.</p>
+            </section>
           ) : (
             <section className="auth-content">
-              <h1>
-                {screen === "signup"
-                  ? "Create your account"
-                  : "Welcome back"}
-              </h1>
-
-              <p>
-                {screen === "signup"
-                  ? "Start making smarter savings decisions."
-                  : "Log in to continue your savings journey."}
-              </p>
-
-              <label htmlFor="email">Email address</label>
-              <input id="email" type="email" placeholder="Enter your email" />
-
-              <label htmlFor="password">Password</label>
-              <input
-                id="password"
-                type="password"
-                placeholder="Enter your password"
-              />
-
-              <button
-                className="primary-button"
-                onClick={() => setScreen("dashboard")}
-              >
-                {screen === "signup" ? "Create Account" : "Log In"}
-              </button>
-
-              <button
-                className="secondary-button"
-                onClick={() => setScreen("welcome")}
-              >
+              <h1>{screen === "signup" ? "Create your account" : "Welcome back"}</h1>
+              <p>{screen === "signup" ? "Start making smarter savings decisions." : "Log in to continue your savings journey."}</p>
+              <form onSubmit={screen === "signup" ? handleSignup : handleLogin} style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+                {screen === "signup" && (
+                  <>
+                    <label htmlFor="auth-name">Full name</label>
+                    <input
+                      id="auth-name"
+                      type="text"
+                      value={authName}
+                      onChange={(event) => setAuthName(event.target.value)}
+                      placeholder="Enter your name"
+                      required
+                      style={inputStyle}
+                    />
+                  </>
+                )}
+                <label htmlFor="auth-email">Email address</label>
+                <input
+                  id="auth-email"
+                  type="email"
+                  value={authEmail}
+                  onChange={(event) => setAuthEmail(event.target.value)}
+                  placeholder="Enter your email"
+                  required
+                  style={inputStyle}
+                />
+                <label htmlFor="auth-password">Password</label>
+                <div style={{ display: "flex", gap: "8px" }}>
+                  <input
+                    id="auth-password"
+                    type={showPassword ? "text" : "password"}
+                    value={authPassword}
+                    onChange={(event) => setAuthPassword(event.target.value)}
+                    placeholder={screen === "signup" ? "At least 8 characters" : "Enter your password"}
+                    minLength={screen === "signup" ? 8 : undefined}
+                    required
+                    style={{ ...inputStyle, flex: 1, minWidth: 0 }}
+                  />
+                  <button
+                    type="button"
+                    aria-label={showPassword ? "Hide password" : "Show password"}
+                    onClick={() => setShowPassword((value) => !value)}
+                    style={{ border: "1px solid #dce6dc", borderRadius: "10px", background: "white", color: "#315b3d", padding: "0 12px", cursor: "pointer" }}
+                  >
+                    {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+                  </button>
+                </div>
+                {screen === "signup" && (
+                  <>
+                    <label htmlFor="confirm-password">Confirm password</label>
+                    <input
+                      id="confirm-password"
+                      type={showPassword ? "text" : "password"}
+                      value={confirmPassword}
+                      onChange={(event) => setConfirmPassword(event.target.value)}
+                      placeholder="Re-enter your password"
+                      minLength={8}
+                      required
+                      style={inputStyle}
+                    />
+                  </>
+                )}
+                {screen === "login" && (
+                  <button
+                    type="button"
+                    onClick={() => { setForgotEmail(authEmail); setAuthMessage(""); setScreen("forgotPassword"); }}
+                    style={{ alignSelf: "flex-end", border: "none", background: "transparent", color: "#315b3d", fontSize: "13px", fontWeight: 700, cursor: "pointer", padding: "2px 0" }}
+                  >
+                    Forgot Password?
+                  </button>
+                )}
+                <button type="submit" className="primary-button">
+                  {screen === "signup" ? "Create Account" : "Log In"}
+                </button>
+              </form>
+              {authMessage && <p role="status" className="demo-note" style={{ lineHeight: 1.5 }}>{authMessage}</p>}
+              {screen === "login" ? (
+                <button className="secondary-button" onClick={() => goToAuth("signup")}>Create a demo account</button>
+              ) : (
+                <button className="secondary-button" onClick={() => goToAuth("login")}>Already have an account? Log in</button>
+              )}
+              <button className="secondary-button" onClick={() => { setAuthMessage(""); setScreen("welcome"); }}>
                 Back to welcome screen
               </button>
-
               <p className="demo-note">
-                Demo only. No account is created or authenticated.
+                Demo only. Passwords are stored locally as a hash in this browser. This is not secure server authentication.
               </p>
             </section>
           )}
         </div>
       ) : (
-        <Dashboard onLogout={() => setScreen("welcome")} />
+        <Dashboard
+          onLogout={() => { setAuthMessage(""); setAuthPassword(""); setScreen("welcome"); }}
+          onChangePassword={updateDemoPassword}
+        />
       )}
     </main>
   );
 }
-
-function Dashboard({ onLogout }: { onLogout: () => void }) {
-  const [balance, setBalance] = useState(450000);
-  const [monthlyIncome, setMonthlyIncome] = useState(650000);
-  const [monthlyExpenses, setMonthlyExpenses] = useState(200000);
-  const [savings, setSavings] = useState(120000);
-  const [savingsGoal] = useState(200000);
+function Dashboard({
+  onLogout,
+  onChangePassword,
+}: {
+  onLogout: () => void;
+  onChangePassword: (
+    currentPassword: string,
+    newPassword: string
+  ) => Promise<{ ok: boolean; message: string }>;
+}) {
+  const [balance, setBalance] = useState(0);
+  const [monthlyIncome, setMonthlyIncome] = useState(0);
+  const [monthlyExpenses, setMonthlyExpenses] = useState(0);
+  const [savings, setSavings] = useState(0);
+  const [savingsGoal, setSavingsGoal] = useState(0);
 
   const [showSavingsForm, setShowSavingsForm] = useState(false);
   const [savingsAmount, setSavingsAmount] = useState("");
@@ -275,6 +555,12 @@ function Dashboard({ onLogout }: { onLogout: () => void }) {
   const [userSettings, setUserSettings] =
     useState<UserSettings>(defaultSettings);
   const [settingsMessage, setSettingsMessage] = useState("");
+  const [currentPassword, setCurrentPassword] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmNewPassword, setConfirmNewPassword] = useState("");
+  const [showChangePassword, setShowChangePassword] = useState(false);
+  const [passwordMessage, setPasswordMessage] = useState("");
+  const [passwordMessageIsError, setPasswordMessageIsError] = useState(false);
 
   // NOTIFICATIONS
   const [notifications, setNotifications] =
@@ -340,6 +626,7 @@ function Dashboard({ onLogout }: { onLogout: () => void }) {
           setMonthlyExpenses(data.monthlyExpenses);
         }
         if (typeof data.savings === "number") setSavings(data.savings);
+        if (typeof data.savingsGoal === "number") setSavingsGoal(data.savingsGoal);
 
         if (
           Array.isArray(data.transactions) &&
@@ -374,6 +661,7 @@ function Dashboard({ onLogout }: { onLogout: () => void }) {
           monthlyIncome,
           monthlyExpenses,
           savings,
+          savingsGoal,
           transactions,
         })
       );
@@ -386,6 +674,7 @@ function Dashboard({ onLogout }: { onLogout: () => void }) {
     monthlyIncome,
     monthlyExpenses,
     savings,
+    savingsGoal,
     transactions,
   ]);
 
@@ -481,6 +770,30 @@ function Dashboard({ onLogout }: { onLogout: () => void }) {
     }
   }
 
+  async function handleChangePassword(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    if (newPassword.length < 8) {
+      setPasswordMessage("Your new password must contain at least 8 characters.");
+      setPasswordMessageIsError(true);
+      return;
+    }
+    if (newPassword !== confirmNewPassword) {
+      setPasswordMessage("Your new passwords do not match.");
+      setPasswordMessageIsError(true);
+      return;
+    }
+
+    const result = await onChangePassword(currentPassword, newPassword);
+    setPasswordMessage(result.message);
+    setPasswordMessageIsError(!result.ok);
+    if (result.ok) {
+      setCurrentPassword("");
+      setNewPassword("");
+      setConfirmNewPassword("");
+    }
+  }
+
   const profileInitials = userSettings.displayName
     .trim()
     .split(/\s+/)
@@ -552,10 +865,9 @@ function Dashboard({ onLogout }: { onLogout: () => void }) {
     setShowSavingsForm(false);
   }
 
-  const savingsPercentage = Math.min(
-    (savings / savingsGoal) * 100,
-    100
-  );
+  const savingsPercentage = savingsGoal > 0
+    ? Math.min((savings / savingsGoal) * 100, 100)
+    : 0;
 
   // MONTHLY SPENDING CHART
   const monthlySpendingData = Array.from({ length: 6 }, (_, index) => {
@@ -1576,6 +1888,41 @@ function Dashboard({ onLogout }: { onLogout: () => void }) {
             <span>of {formatMoney(savingsGoal)}</span>
           </div>
 
+          <label
+            htmlFor="savings-goal-input"
+            style={{
+              display: "block",
+              margin: "18px 0 7px",
+              color: "#34483b",
+              fontSize: "13px",
+              fontWeight: 600,
+            }}
+          >
+            Set your savings target (₦)
+          </label>
+          <input
+            id="savings-goal-input"
+            type="number"
+            min="0"
+            step="any"
+            value={savingsGoal === 0 ? "" : savingsGoal}
+            onChange={(event) => {
+              const value = event.target.value;
+              setSavingsGoal(value === "" ? 0 : Math.max(0, Number(value) || 0));
+            }}
+            placeholder="Enter your savings goal"
+            style={{
+              width: "100%",
+              boxSizing: "border-box",
+              padding: "12px 14px",
+              border: "1px solid #dce6dc",
+              borderRadius: "10px",
+              color: "#34483b",
+              background: "white",
+              outlineColor: "#8dbb57",
+            }}
+          />
+
           <div className="progress-track">
             <div
               className="progress-fill"
@@ -1584,7 +1931,9 @@ function Dashboard({ onLogout }: { onLogout: () => void }) {
           </div>
 
           <p className="progress-caption">
-            {Math.round(savingsPercentage)}% of your goal completed
+            {savingsGoal > 0
+              ? `${Math.round(savingsPercentage)}% of your goal completed`
+              : "Enter a savings target above to track your progress."}
           </p>
 
           <button
@@ -1829,6 +2178,83 @@ function Dashboard({ onLogout }: { onLogout: () => void }) {
           >
             Manage your profile and notification preferences.
           </p>
+
+          <section
+            aria-labelledby="change-password-heading"
+            style={{
+              margin: "0 0 24px",
+              padding: "18px",
+              border: "1px solid #e5ece3",
+              borderRadius: "12px",
+              background: "#f8faf7",
+            }}
+          >
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "12px", flexWrap: "wrap" }}>
+              <div>
+                <h3 id="change-password-heading" style={{ color: "#34483b", fontSize: "16px", margin: "0 0 5px" }}>
+                  Change Password
+                </h3>
+                <p style={{ color: "#89958a", fontSize: "12px", margin: 0 }}>
+                  Update the password for this local demo account.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => { setShowChangePassword((value) => !value); setPasswordMessage(""); }}
+                style={{ border: "1px solid #dce6dc", borderRadius: "9px", background: "white", color: "#315b3d", padding: "9px 12px", fontSize: "12px", fontWeight: 700, cursor: "pointer" }}
+              >
+                {showChangePassword ? "Cancel" : "Change Password"}
+              </button>
+            </div>
+
+            {showChangePassword && (
+              <form onSubmit={handleChangePassword} style={{ display: "flex", flexDirection: "column", gap: "12px", marginTop: "17px" }}>
+                <label htmlFor="current-password" style={{ color: "#34483b", fontSize: "13px", fontWeight: 600 }}>Current password</label>
+                <input
+                  id="current-password"
+                  type="password"
+                  value={currentPassword}
+                  onChange={(event) => setCurrentPassword(event.target.value)}
+                  autoComplete="current-password"
+                  required
+                  style={{ width: "100%", boxSizing: "border-box", padding: "13px", border: "1px solid #dce6dc", borderRadius: "10px", color: "#34483b" }}
+                />
+                <label htmlFor="new-password" style={{ color: "#34483b", fontSize: "13px", fontWeight: 600 }}>New password</label>
+                <input
+                  id="new-password"
+                  type="password"
+                  value={newPassword}
+                  onChange={(event) => setNewPassword(event.target.value)}
+                  minLength={8}
+                  autoComplete="new-password"
+                  placeholder="At least 8 characters"
+                  required
+                  style={{ width: "100%", boxSizing: "border-box", padding: "13px", border: "1px solid #dce6dc", borderRadius: "10px", color: "#34483b" }}
+                />
+                <label htmlFor="confirm-new-password" style={{ color: "#34483b", fontSize: "13px", fontWeight: 600 }}>Confirm new password</label>
+                <input
+                  id="confirm-new-password"
+                  type="password"
+                  value={confirmNewPassword}
+                  onChange={(event) => setConfirmNewPassword(event.target.value)}
+                  minLength={8}
+                  autoComplete="new-password"
+                  placeholder="Re-enter new password"
+                  required
+                  style={{ width: "100%", boxSizing: "border-box", padding: "13px", border: "1px solid #dce6dc", borderRadius: "10px", color: "#34483b" }}
+                />
+                <button type="submit" className="primary-button">Save New Password</button>
+                {passwordMessage && (
+                  <p role="status" style={{ color: passwordMessageIsError ? "#a45d42" : "#315b3d", background: passwordMessageIsError ? "#fff4ef" : "#edf6e9", borderRadius: "9px", padding: "12px", fontSize: "12px", lineHeight: 1.5, margin: 0 }}>
+                    {passwordMessage}
+                  </p>
+                )}
+                <p style={{ color: "#89958a", fontSize: "11px", lineHeight: 1.5, margin: 0 }}>
+                  Demo only. This password is stored locally in this browser; it does not change a real online account password.
+                </p>
+              </form>
+            )}
+          </section>
 
           <form
             onSubmit={handleSaveSettings}
